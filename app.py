@@ -98,6 +98,18 @@ with tab_assumptions:
     | **Discount rate** | 3% | Represents opportunity cost of capital. Range: 0% (pure payback) to 5-7% (commercial hurdle rate). |
     """)
 
+    st.subheader("Financing Options")
+    st.markdown("""
+    | Parameter | Default | Rationale |
+    |-----------|---------|-----------|
+    | **Loan term** | 10 years | Common term for home improvement loans. Range: 5-20 years available from most lenders. |
+    | **Interest rate** | 5% | Typical unsecured personal loan rate (2024). Secured loans may be lower (3-4%), credit cards higher (15-25%). |
+
+    **Note:** When financing, the cumulative cashflow chart shows net benefit after loan payments.
+    During the loan term, annual savings are reduced by loan payments. After the loan is paid off,
+    full savings are retained.
+    """)
+
     st.subheader("Sources")
     st.markdown("""
     - [Ofgem Price Cap](https://www.ofgem.gov.uk/energy-price-cap) - Quarterly electricity price updates
@@ -113,6 +125,14 @@ with tab_calculator:
     installation in the UK. It contrasts **peak (kWp) output assumptions** with
     **weather-based capacity-factor-adjusted energy generation**.
     """)
+
+    # --- Payment Method Selection ---
+    payment_method = st.radio(
+        "Payment Method",
+        ["Purchase (upfront)", "Finance (loan)"],
+        horizontal=True
+    )
+    finance_mode = payment_method == "Finance (loan)"
 
     # --- Sidebar Inputs ---
     st.sidebar.header("System & Weather Inputs")
@@ -164,6 +184,23 @@ with tab_calculator:
         min_value=0.0, max_value=8.0, value=3.0, step=0.5
     )
 
+    # Financing options (only shown when finance mode selected)
+    if finance_mode:
+        st.sidebar.header("Financing Options")
+
+        loan_term = st.sidebar.slider(
+            "Loan term (years)",
+            min_value=5, max_value=20, value=10, step=1
+        )
+
+        loan_rate = st.sidebar.slider(
+            "Loan interest rate (%)",
+            min_value=0.0, max_value=15.0, value=5.0, step=0.5
+        )
+    else:
+        loan_term = 10
+        loan_rate = 5.0
+
     st.sidebar.header("Demand Inputs")
 
     d_annual = st.sidebar.slider(
@@ -214,13 +251,19 @@ with tab_calculator:
     cashflow_no_batt = calculate_multi_year_cashflow(
         pv_cost, battery_cost, d_annual, self_consumption,
         grid_price_p, seg_price_p, annual_growth, years, discount_rate,
-        include_battery=False
+        include_battery=False,
+        finance_mode=finance_mode,
+        loan_term=loan_term,
+        loan_rate=loan_rate
     )
 
     cashflow_batt = calculate_multi_year_cashflow(
         pv_cost, battery_cost, d_annual, self_consumption,
         grid_price_p, seg_price_p, annual_growth, years, discount_rate,
-        include_battery=True
+        include_battery=True,
+        finance_mode=finance_mode,
+        loan_term=loan_term,
+        loan_rate=loan_rate
     )
 
     # --- Summary Cards ---
@@ -254,6 +297,20 @@ with tab_calculator:
     with col6:
         total_cost = pv_cost + (battery_cost if battery_kwh > 0 else 0)
         st.metric("Total Install Cost", f"£{total_cost:,.0f}")
+
+    # Show financing details if in finance mode
+    if finance_mode:
+        cashflow = cashflow_batt if battery_kwh > 0 else cashflow_no_batt
+        st.subheader("Financing Details")
+        col_fin1, col_fin2, col_fin3, col_fin4 = st.columns(4)
+        with col_fin1:
+            st.metric("Annual Loan Payment", f"£{cashflow['annual_loan_payment']:,.0f}")
+        with col_fin2:
+            st.metric("Loan Term", f"{loan_term} years")
+        with col_fin3:
+            st.metric("Interest Rate", f"{loan_rate}%")
+        with col_fin4:
+            st.metric("Total Interest Paid", f"£{cashflow['total_interest']:,.0f}")
 
     # --- Explanatory Text ---
     st.info("""
@@ -345,7 +402,10 @@ with tab_calculator:
     st.plotly_chart(fig3, use_container_width=True)
 
     # Chart 4: Cumulative Cashflow
-    st.subheader("Cumulative Cashflow Over Time")
+    if finance_mode:
+        st.subheader("Cumulative Cashflow Over Time (with Loan Payments)")
+    else:
+        st.subheader("Cumulative Cashflow Over Time")
 
     years_list = list(range(1, years + 1))
     df_cashflow = pd.DataFrame({
@@ -364,6 +424,15 @@ with tab_calculator:
         name="PV + Battery", line=dict(color="#9B59B6", width=3)
     ))
     fig4.add_hline(y=0, line_dash="dash", line_color="gray")
+
+    # Add vertical line at end of loan term if financing
+    if finance_mode:
+        fig4.add_vline(
+            x=loan_term, line_dash="dot", line_color="orange",
+            annotation_text="Loan paid off",
+            annotation_position="top right"
+        )
+
     fig4.update_layout(
         xaxis_title="Year",
         yaxis_title="Cumulative Cashflow (£)",

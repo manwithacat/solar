@@ -97,6 +97,14 @@ def calculate_annual_financials(
     }
 
 
+def calculate_loan_payment(principal: float, annual_rate: float, term_years: int) -> float:
+    """Calculate annual loan payment using amortization formula."""
+    if annual_rate == 0:
+        return principal / term_years if term_years > 0 else 0
+    r = annual_rate / 100
+    return principal * (r * (1 + r) ** term_years) / ((1 + r) ** term_years - 1)
+
+
 def calculate_multi_year_cashflow(
     pv_cost: float,
     battery_cost: float,
@@ -107,9 +115,18 @@ def calculate_multi_year_cashflow(
     annual_growth: float,
     years: int,
     discount_rate: float,
-    include_battery: bool
+    include_battery: bool,
+    finance_mode: bool = False,
+    loan_term: int = 10,
+    loan_rate: float = 5.0
 ) -> dict:
-    """Calculate multi-year cashflow projection."""
+    """Calculate multi-year cashflow projection.
+
+    Args:
+        finance_mode: If True, spread install cost over loan term with interest
+        loan_term: Number of years for loan repayment
+        loan_rate: Annual interest rate for loan (%)
+    """
 
     if include_battery:
         grid_import = self_consumption["grid_import_with_batt"]
@@ -122,10 +139,23 @@ def calculate_multi_year_cashflow(
 
     p_export = seg_price_p / 100
 
+    # Calculate annual loan payment if financing
+    annual_loan_payment = 0
+    total_interest = 0
+    if finance_mode and install_cost > 0:
+        annual_loan_payment = calculate_loan_payment(install_cost, loan_rate, loan_term)
+        total_interest = (annual_loan_payment * loan_term) - install_cost
+
     annual_savings = []
+    annual_net_benefit = []  # Savings minus loan payment
     cumulative_cashflow = []
     discounted_cashflow = []
-    cum_cf = -install_cost
+
+    # For purchase: upfront cost; for finance: no upfront cost
+    if finance_mode:
+        cum_cf = 0
+    else:
+        cum_cf = -install_cost
 
     for t in range(1, years + 1):
         # Grid price escalates each year
@@ -137,11 +167,19 @@ def calculate_multi_year_cashflow(
         net_saving_t = (cost_baseline_t - cost_with_pv_t) + income_export_t
 
         annual_savings.append(net_saving_t)
-        cum_cf += net_saving_t
+
+        # Subtract loan payment if within loan term
+        if finance_mode and t <= loan_term:
+            net_benefit_t = net_saving_t - annual_loan_payment
+        else:
+            net_benefit_t = net_saving_t
+
+        annual_net_benefit.append(net_benefit_t)
+        cum_cf += net_benefit_t
         cumulative_cashflow.append(cum_cf)
 
         # Discounted cashflow for NPV
-        discounted_cf = net_saving_t / ((1 + discount_rate / 100) ** t)
+        discounted_cf = net_benefit_t / ((1 + discount_rate / 100) ** t)
         discounted_cashflow.append(discounted_cf)
 
     # Calculate payback period
@@ -151,13 +189,17 @@ def calculate_multi_year_cashflow(
             payback = i + 1
             break
 
-    # Calculate NPV
-    npv = -install_cost + sum(discounted_cashflow)
+    # Calculate NPV (no upfront cost for financed, payments are in cashflow)
+    npv = sum(discounted_cashflow)
 
     return {
         "install_cost": install_cost,
         "annual_savings": annual_savings,
+        "annual_net_benefit": annual_net_benefit,
         "cumulative_cashflow": cumulative_cashflow,
         "payback_years": payback,
-        "npv": npv
+        "npv": npv,
+        "annual_loan_payment": annual_loan_payment,
+        "total_interest": total_interest,
+        "loan_term": loan_term if finance_mode else 0
     }
