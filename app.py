@@ -179,6 +179,19 @@ with tab_battery:
     **Net benefit per kWh shifted:** 28p - 15p = **13p/kWh**
     """)
 
+    st.markdown("""
+    #### Why batteries were an easier sell in 2022-23
+
+    | Period | Grid price | Export rate | Spread | 5kWh battery payback |
+    |--------|-----------|-------------|--------|---------------------|
+    | **2022-23 crisis** | 50-60p | 4-5p | ~50p | **~4 years** ✅ |
+    | **2024 normalised** | 28p | 15p | 13p | **~15 years** ❌ |
+
+    The energy crisis made batteries a no-brainer. Now that prices have normalised and export
+    tariffs have risen (to encourage solar adoption), the spread has collapsed — and so has
+    the battery business case.
+    """)
+
     st.subheader("Battery Payback vs Lifespan")
 
     st.warning("""
