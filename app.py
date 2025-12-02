@@ -20,6 +20,7 @@ from utils import (
     calculate_ev_consumption,
     adjust_consumption_for_heating
 )
+from quotation import generate_quotation_pdf
 
 st.set_page_config(
     page_title="UK Solar Economics Calculator",
@@ -29,7 +30,7 @@ st.set_page_config(
 
 st.title("☀️ UK Solar Economics Calculator")
 
-tab_calculator, tab_assumptions = st.tabs(["Calculator", "Assumptions & Sources"])
+tab_calculator, tab_quotation, tab_assumptions = st.tabs(["Calculator", "Generate Quotation", "Assumptions & Sources"])
 
 with tab_assumptions:
     st.header("Default Values & Sources")
@@ -590,3 +591,154 @@ with tab_calculator:
     # Footer
     st.markdown("---")
     st.caption("This is an educational model, not a physically accurate irradiance simulation.")
+
+with tab_quotation:
+    st.header("Generate Customer Quotation")
+    st.markdown("""
+    Create a professional PDF quotation based on the current calculator settings.
+    Fill in the customer details below and click Generate to download.
+    """)
+
+    st.subheader("Customer Details")
+    col_cust1, col_cust2 = st.columns(2)
+    with col_cust1:
+        customer_name = st.text_input("Customer Name", value="Mr & Mrs Smith")
+        company_name = st.text_input("Your Company Name", value="SolarTech Solutions")
+    with col_cust2:
+        customer_address = st.text_area("Customer Address", value="123 Solar Street\nSunnyville\nSN1 2AB", height=100)
+        quote_ref = st.text_input("Quote Reference (optional)", value="", placeholder="Auto-generated if blank")
+
+    st.subheader("Quotation Options")
+    st.markdown("Select which quotations to generate:")
+
+    col_opt1, col_opt2 = st.columns(2)
+    with col_opt1:
+        gen_purchase = st.checkbox("Purchase (Upfront Payment)", value=True)
+        gen_finance = st.checkbox("Finance (Loan)", value=True)
+    with col_opt2:
+        gen_no_ev = st.checkbox("Without EV", value=True)
+        gen_with_ev = st.checkbox("With EV Charging", value=True)
+
+    st.markdown("---")
+
+    # Use current sidebar values for the quotation
+    # These are defined in the calculator tab but accessible here
+    try:
+        current_settings = {
+            "location": location,
+            "orientation": orientation,
+            "kwp": kwp,
+            "battery_kwh": battery_kwh,
+            "pv_cost": pv_cost,
+            "battery_cost": battery_cost,
+            "grid_price_p": grid_price_p,
+            "seg_price_p": seg_price_p,
+            "annual_growth": annual_growth,
+            "heating_type": heating_type,
+            "d_annual_base": d_annual_base,
+            "daytime_share": daytime_share,
+            "years": years,
+            "discount_rate": discount_rate,
+            "loan_term": loan_term,
+            "loan_rate": loan_rate,
+            "deposit_pct": deposit_pct,
+            "daily_miles": daily_miles if has_ev else 30,
+            "home_charging_pct": home_charging_pct if has_ev else 0.8,
+        }
+
+        st.subheader("Current System Configuration")
+        col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+        with col_cfg1:
+            st.write(f"**Solar:** {kwp} kWp")
+            st.write(f"**Battery:** {battery_kwh} kWh")
+            st.write(f"**Location:** {location}")
+        with col_cfg2:
+            st.write(f"**PV Cost:** £{pv_cost:,}")
+            st.write(f"**Battery Cost:** £{battery_cost:,}")
+            st.write(f"**Total:** £{pv_cost + battery_cost:,}")
+        with col_cfg3:
+            st.write(f"**Heating:** {heating_type}")
+            st.write(f"**Base Usage:** {d_annual_base:,} kWh")
+            st.write(f"**Loan:** {loan_term}yr @ {loan_rate}%")
+
+        st.markdown("---")
+
+        if st.button("Generate Quotation PDFs", type="primary"):
+            scenarios_to_generate = []
+
+            if gen_purchase and gen_no_ev:
+                scenarios_to_generate.append({
+                    "name": "Purchase - No EV",
+                    "filename": "quotation_purchase_no_ev.pdf",
+                    "finance_mode": False,
+                    "has_ev": False,
+                })
+            if gen_purchase and gen_with_ev:
+                scenarios_to_generate.append({
+                    "name": "Purchase - With EV",
+                    "filename": "quotation_purchase_with_ev.pdf",
+                    "finance_mode": False,
+                    "has_ev": True,
+                })
+            if gen_finance and gen_no_ev:
+                scenarios_to_generate.append({
+                    "name": "Finance - No EV",
+                    "filename": "quotation_finance_no_ev.pdf",
+                    "finance_mode": True,
+                    "has_ev": False,
+                })
+            if gen_finance and gen_with_ev:
+                scenarios_to_generate.append({
+                    "name": "Finance - With EV",
+                    "filename": "quotation_finance_with_ev.pdf",
+                    "finance_mode": True,
+                    "has_ev": True,
+                })
+
+            if not scenarios_to_generate:
+                st.warning("Please select at least one quotation option.")
+            else:
+                st.subheader("Generated Quotations")
+
+                for scenario in scenarios_to_generate:
+                    with st.spinner(f"Generating {scenario['name']}..."):
+                        pdf_bytes = generate_quotation_pdf(
+                            customer_name=customer_name,
+                            customer_address=customer_address,
+                            location=current_settings["location"],
+                            orientation=current_settings["orientation"],
+                            kwp=current_settings["kwp"],
+                            battery_kwh=current_settings["battery_kwh"],
+                            pv_cost=current_settings["pv_cost"],
+                            battery_cost=current_settings["battery_cost"],
+                            grid_price_p=current_settings["grid_price_p"],
+                            seg_price_p=current_settings["seg_price_p"],
+                            annual_growth=current_settings["annual_growth"],
+                            heating_type=current_settings["heating_type"],
+                            d_annual_base=current_settings["d_annual_base"],
+                            daytime_share=current_settings["daytime_share"],
+                            has_ev=scenario["has_ev"],
+                            daily_miles=current_settings["daily_miles"],
+                            home_charging_pct=current_settings["home_charging_pct"],
+                            finance_mode=scenario["finance_mode"],
+                            deposit_pct=current_settings["deposit_pct"],
+                            loan_term=current_settings["loan_term"],
+                            loan_rate=current_settings["loan_rate"],
+                            years=current_settings["years"],
+                            discount_rate=current_settings["discount_rate"],
+                            company_name=company_name,
+                            quote_ref=quote_ref if quote_ref else None
+                        )
+
+                        st.download_button(
+                            label=f"Download: {scenario['name']}",
+                            data=pdf_bytes,
+                            file_name=scenario["filename"],
+                            mime="application/pdf",
+                            key=scenario["filename"]
+                        )
+
+                st.success(f"Generated {len(scenarios_to_generate)} quotation(s)!")
+
+    except NameError:
+        st.warning("Please configure your system in the Calculator tab first. The sidebar inputs need to be set before generating quotations.")
