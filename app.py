@@ -9,14 +9,16 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from constants import MONTH_NAMES
+from constants import MONTH_NAMES, HEATING_TYPES
 from utils import (
     calculate_generation,
     calculate_monthly_generation,
     calculate_monthly_consumption,
     calculate_self_consumption,
     calculate_annual_financials,
-    calculate_multi_year_cashflow
+    calculate_multi_year_cashflow,
+    calculate_ev_consumption,
+    adjust_consumption_for_heating
 )
 
 st.set_page_config(
@@ -102,12 +104,38 @@ with tab_assumptions:
     st.markdown("""
     | Parameter | Default | Rationale |
     |-----------|---------|-----------|
+    | **Deposit** | 25% | Typical deposit for solar finance. Range: 0-50% depending on lender and credit. |
     | **Loan term** | 10 years | Common term for home improvement loans. Range: 5-20 years available from most lenders. |
     | **Interest rate** | 5% | Typical unsecured personal loan rate (2024). Secured loans may be lower (3-4%), credit cards higher (15-25%). |
 
     **Note:** When financing, the cumulative cashflow chart shows net benefit after loan payments.
     During the loan term, annual savings are reduced by loan payments. After the loan is paid off,
     full savings are retained.
+    """)
+
+    st.subheader("Heating Types")
+    st.markdown("""
+    | Heating Type | Consumption Multiplier | Monthly Profile |
+    |--------------|----------------------|-----------------|
+    | **Gas/Oil boiler** | 1.0x | Relatively flat (slight winter increase for lighting) |
+    | **Heat pump** | 1.5x | Winter-weighted. Heat pumps are efficient (COP 3-4) but still add ~50% to electricity use. |
+    | **Electric resistive** | 2.5x | Winter-weighted. Storage heaters/direct electric significantly increase consumption. |
+
+    Electric heating creates a mismatch: highest consumption in winter when solar generation is lowest.
+    This affects payback calculations significantly.
+    """)
+
+    st.subheader("EV Charging")
+    st.markdown("""
+    | Parameter | Default | Rationale |
+    |-----------|---------|-----------|
+    | **Daily miles** | 30 | UK average is ~20-25 miles/day. 30 is slightly above average for commuters. |
+    | **Home charging share** | 80% | Most EV owners charge primarily at home. Range: 50-100% depending on workplace/public charging access. |
+    | **Efficiency** | 0.3 kWh/mile | Typical for modern EVs. Range: 0.25 (efficient) to 0.4 (larger vehicles, cold weather). |
+
+    **EV + Battery synergy:** A home battery can store daytime solar for evening EV charging,
+    significantly increasing solar self-consumption. Without a battery, most EV charging
+    (typically done overnight) must come from the grid.
     """)
 
     st.subheader("Sources")
@@ -130,6 +158,7 @@ with tab_calculator:
     payment_method = st.radio(
         "Payment Method",
         ["Purchase (upfront)", "Finance (loan)"],
+        index=1,  # Default to Finance
         horizontal=True
     )
     finance_mode = payment_method == "Finance (loan)"
@@ -188,6 +217,11 @@ with tab_calculator:
     if finance_mode:
         st.sidebar.header("Financing Options")
 
+        deposit_pct = st.sidebar.slider(
+            "Deposit (%)",
+            min_value=0, max_value=50, value=25, step=5
+        )
+
         loan_term = st.sidebar.slider(
             "Loan term (years)",
             min_value=5, max_value=20, value=10, step=1
@@ -198,20 +232,52 @@ with tab_calculator:
             min_value=0.0, max_value=15.0, value=5.0, step=0.5
         )
     else:
+        deposit_pct = 0
         loan_term = 10
         loan_rate = 5.0
 
     st.sidebar.header("Demand Inputs")
 
-    d_annual = st.sidebar.slider(
-        "Annual household electricity usage (kWh)",
-        min_value=1500, max_value=8000, value=3500, step=100
+    heating_type = st.sidebar.selectbox(
+        "Heating Type",
+        list(HEATING_TYPES.keys()),
+        help="Electric heating significantly increases electricity consumption"
     )
+
+    d_annual_base = st.sidebar.slider(
+        "Base electricity usage (kWh/year)",
+        min_value=1500, max_value=8000, value=3500, step=100,
+        help="Excluding heating. For electric heating, total will be adjusted."
+    )
+
+    # Adjust for heating type
+    d_annual = adjust_consumption_for_heating(d_annual_base, heating_type)
 
     daytime_share = st.sidebar.slider(
         "Daytime usage share (%)",
         min_value=20, max_value=70, value=40, step=5
     ) / 100
+
+    # EV charging options
+    st.sidebar.header("EV Charging (Optional)")
+
+    has_ev = st.sidebar.checkbox("Include EV charging", value=False)
+
+    if has_ev:
+        daily_miles = st.sidebar.slider(
+            "Average daily miles",
+            min_value=10, max_value=100, value=30, step=5
+        )
+        home_charging_pct = st.sidebar.slider(
+            "Home charging share (%)",
+            min_value=50, max_value=100, value=80, step=5,
+            help="Percentage of charging done at home vs workplace/public"
+        ) / 100
+        ev_consumption = calculate_ev_consumption(daily_miles, home_charging_pct)
+        ev_annual_kwh = ev_consumption["annual_kwh"]
+    else:
+        daily_miles = 0
+        ev_annual_kwh = 0
 
     years = st.sidebar.slider(
         "Time horizon (years)",
@@ -226,14 +292,17 @@ with tab_calculator:
     # --- Calculations ---
     generation = calculate_generation(kwp, location, orientation)
     monthly_gen = calculate_monthly_generation(generation["realistic"])
-    monthly_cons = calculate_monthly_consumption(d_annual)
+    monthly_cons = calculate_monthly_consumption(d_annual, heating_type)
 
     self_consumption = calculate_self_consumption(
-        generation["realistic"], d_annual, daytime_share, battery_kwh
+        generation["realistic"], d_annual, daytime_share, battery_kwh,
+        ev_annual_kwh=ev_annual_kwh
     )
 
+    total_demand = self_consumption["total_demand"]
+
     financials_no_batt = calculate_annual_financials(
-        d_annual,
+        total_demand,
         self_consumption["grid_import_no_batt"],
         self_consumption["e_export_no_batt"],
         grid_price_p,
@@ -241,7 +310,7 @@ with tab_calculator:
     )
 
     financials_batt = calculate_annual_financials(
-        d_annual,
+        total_demand,
         self_consumption["grid_import_with_batt"],
         self_consumption["e_export_batt"],
         grid_price_p,
@@ -249,21 +318,23 @@ with tab_calculator:
     )
 
     cashflow_no_batt = calculate_multi_year_cashflow(
-        pv_cost, battery_cost, d_annual, self_consumption,
+        pv_cost, battery_cost, total_demand, self_consumption,
         grid_price_p, seg_price_p, annual_growth, years, discount_rate,
         include_battery=False,
         finance_mode=finance_mode,
         loan_term=loan_term,
-        loan_rate=loan_rate
+        loan_rate=loan_rate,
+        deposit_pct=deposit_pct
     )
 
     cashflow_batt = calculate_multi_year_cashflow(
-        pv_cost, battery_cost, d_annual, self_consumption,
+        pv_cost, battery_cost, total_demand, self_consumption,
         grid_price_p, seg_price_p, annual_growth, years, discount_rate,
         include_battery=True,
         finance_mode=finance_mode,
         loan_term=loan_term,
-        loan_rate=loan_rate
+        loan_rate=loan_rate,
+        deposit_pct=deposit_pct
     )
 
     # --- Summary Cards ---
@@ -298,19 +369,49 @@ with tab_calculator:
         total_cost = pv_cost + (battery_cost if battery_kwh > 0 else 0)
         st.metric("Total Install Cost", f"£{total_cost:,.0f}")
 
+    # Show consumption breakdown if electric heating or EV
+    if heating_type != "Gas/Oil boiler" or has_ev:
+        st.subheader("Consumption Breakdown")
+        col_cons1, col_cons2, col_cons3 = st.columns(3)
+        with col_cons1:
+            st.metric("Base Electricity", f"{d_annual_base:,.0f} kWh")
+        with col_cons2:
+            if heating_type != "Gas/Oil boiler":
+                st.metric(f"With {heating_type}", f"{d_annual:,.0f} kWh")
+            else:
+                st.metric("Household Total", f"{d_annual:,.0f} kWh")
+        with col_cons3:
+            if has_ev:
+                st.metric("EV Charging", f"{ev_annual_kwh:,.0f} kWh/year")
+                st.caption(f"({daily_miles} miles/day)")
+
+    # Show EV solar charging if applicable
+    if has_ev and battery_kwh > 0:
+        st.subheader("EV Charging from Solar")
+        col_ev1, col_ev2, col_ev3 = st.columns(3)
+        with col_ev1:
+            st.metric("EV from Solar/Battery", f"{self_consumption['ev_from_solar']:,.0f} kWh")
+        with col_ev2:
+            st.metric("EV from Grid", f"{self_consumption['ev_from_grid']:,.0f} kWh")
+        with col_ev3:
+            ev_solar_pct = (self_consumption['ev_from_solar'] / ev_annual_kwh * 100) if ev_annual_kwh > 0 else 0
+            st.metric("Solar EV Charging %", f"{ev_solar_pct:.0f}%")
+
     # Show financing details if in finance mode
     if finance_mode:
         cashflow = cashflow_batt if battery_kwh > 0 else cashflow_no_batt
         st.subheader("Financing Details")
-        col_fin1, col_fin2, col_fin3, col_fin4 = st.columns(4)
+        col_fin1, col_fin2, col_fin3, col_fin4, col_fin5 = st.columns(5)
         with col_fin1:
-            st.metric("Annual Loan Payment", f"£{cashflow['annual_loan_payment']:,.0f}")
+            st.metric("Deposit", f"£{cashflow['deposit_amount']:,.0f}")
         with col_fin2:
-            st.metric("Loan Term", f"{loan_term} years")
+            st.metric("Loan Amount", f"£{cashflow['loan_amount']:,.0f}")
         with col_fin3:
-            st.metric("Interest Rate", f"{loan_rate}%")
+            st.metric("Annual Payment", f"£{cashflow['annual_loan_payment']:,.0f}")
         with col_fin4:
-            st.metric("Total Interest Paid", f"£{cashflow['total_interest']:,.0f}")
+            st.metric("Loan Term", f"{loan_term} years @ {loan_rate}%")
+        with col_fin5:
+            st.metric("Total Interest", f"£{cashflow['total_interest']:,.0f}")
 
     # --- Explanatory Text ---
     st.info("""

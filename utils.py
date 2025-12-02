@@ -4,6 +4,10 @@ from constants import (
     REGION_CAPACITY_FACTOR,
     ORIENTATION_FACTOR,
     MONTHLY_FRACTIONS,
+    HEATING_TYPES,
+    CONSUMPTION_PROFILE_GAS,
+    EV_EFFICIENCY_KWH_PER_MILE,
+    DAYS_PER_YEAR,
     HOURS_PER_YEAR
 )
 
@@ -31,37 +35,109 @@ def calculate_monthly_generation(e_realistic: float) -> list:
     return [e_realistic * frac for frac in MONTHLY_FRACTIONS]
 
 
-def calculate_monthly_consumption(d_annual: float) -> list:
-    """Distribute annual consumption evenly across months."""
-    return [d_annual / 12] * 12
+def calculate_monthly_consumption(
+    d_annual: float,
+    heating_type: str = "Gas/Oil boiler"
+) -> list:
+    """Distribute annual consumption across months based on heating type."""
+    profile = HEATING_TYPES.get(heating_type, {}).get("profile", CONSUMPTION_PROFILE_GAS)
+    return [d_annual * frac for frac in profile]
+
+
+def calculate_ev_consumption(
+    daily_miles: float,
+    home_charging_share: float = 0.8
+) -> dict:
+    """Calculate annual EV charging demand.
+
+    Args:
+        daily_miles: Average daily miles driven
+        home_charging_share: Fraction of charging done at home (0-1)
+
+    Returns:
+        Dict with annual_kwh and daily_kwh for home charging
+    """
+    daily_kwh_total = daily_miles * EV_EFFICIENCY_KWH_PER_MILE
+    daily_kwh_home = daily_kwh_total * home_charging_share
+    annual_kwh = daily_kwh_home * DAYS_PER_YEAR
+
+    return {
+        "daily_kwh_total": daily_kwh_total,
+        "daily_kwh_home": daily_kwh_home,
+        "annual_kwh": annual_kwh
+    }
+
+
+def adjust_consumption_for_heating(
+    base_usage: float,
+    heating_type: str
+) -> float:
+    """Adjust base electricity usage based on heating type.
+
+    For electric heating, total consumption increases significantly.
+    """
+    multiplier = HEATING_TYPES.get(heating_type, {}).get("base_usage_multiplier", 1.0)
+    return base_usage * multiplier
 
 
 def calculate_self_consumption(
     e_realistic: float,
     d_annual: float,
     daytime_share: float,
-    battery_kwh: float
+    battery_kwh: float,
+    ev_annual_kwh: float = 0,
+    ev_solar_share: float = 0.3
 ) -> dict:
-    """Calculate self-consumption with and without battery."""
+    """Calculate self-consumption with and without battery.
 
-    # Direct self-consumption (no battery)
+    Args:
+        e_realistic: Annual solar generation (kWh)
+        d_annual: Annual household consumption (kWh)
+        daytime_share: Fraction of consumption during daylight hours
+        battery_kwh: Usable battery capacity (kWh)
+        ev_annual_kwh: Annual EV charging demand at home (kWh)
+        ev_solar_share: Fraction of EV charging that can use solar/battery
+                        (depends on charging timing - daytime/evening)
+    """
+    # Total demand including EV
+    total_demand = d_annual + ev_annual_kwh
+
+    # Direct self-consumption (no battery) - household only
     d_day = d_annual * daytime_share
     f_direct = min(0.8 * d_day / e_realistic, 0.8) if e_realistic > 0 else 0
     e_self_direct = e_realistic * f_direct
     e_export_no_batt = max(0, e_realistic - e_self_direct)
-    grid_import_no_batt = max(0, d_annual - e_self_direct)
+    grid_import_no_batt = max(0, total_demand - e_self_direct)
 
-    # Battery model (heuristic, 1 cycle/day max)
-    e_surplus_daily = max(0, (e_realistic - e_self_direct) / 365)
+    # Battery model (heuristic, 1 cycle/day max for home battery)
+    e_surplus_daily = max(0, (e_realistic - e_self_direct) / DAYS_PER_YEAR)
     b_daily_max = battery_kwh
     e_batt_daily = min(e_surplus_daily, b_daily_max)
-    e_batt_annual = e_batt_daily * 365
+    e_batt_annual = e_batt_daily * DAYS_PER_YEAR
 
-    d_remaining = max(0, d_annual - e_self_direct)
-    e_self_batt = min(e_batt_annual, d_remaining)
+    # Battery first serves remaining household demand
+    d_remaining_household = max(0, d_annual - e_self_direct)
+    e_batt_to_house = min(e_batt_annual, d_remaining_household)
+
+    # Remaining battery capacity can charge EV (if charging in evening)
+    e_batt_remaining = e_batt_annual - e_batt_to_house
+    ev_from_battery = min(e_batt_remaining, ev_annual_kwh * ev_solar_share)
+
+    # Some EV charging can also happen directly during daytime
+    ev_direct_solar = min(
+        max(0, e_realistic - e_self_direct - e_batt_annual) * 0.3,  # 30% of remaining export
+        ev_annual_kwh * 0.2  # Up to 20% of EV demand if charging during day
+    )
+
+    # Total self-consumption with battery
+    e_self_batt = e_batt_to_house + ev_from_battery + ev_direct_solar
+    total_solar_to_ev = ev_from_battery + ev_direct_solar
 
     e_export_batt = max(0, e_realistic - e_self_direct - e_self_batt)
-    grid_import_with_batt = max(0, d_annual - e_self_direct - e_self_batt)
+    grid_import_with_batt = max(0, total_demand - e_self_direct - e_self_batt)
+
+    # EV-specific metrics
+    ev_grid_import = max(0, ev_annual_kwh - total_solar_to_ev)
 
     return {
         "e_self_direct": e_self_direct,
@@ -69,7 +145,11 @@ def calculate_self_consumption(
         "grid_import_no_batt": grid_import_no_batt,
         "e_self_batt": e_self_batt,
         "e_export_batt": e_export_batt,
-        "grid_import_with_batt": grid_import_with_batt
+        "grid_import_with_batt": grid_import_with_batt,
+        "ev_annual_kwh": ev_annual_kwh,
+        "ev_from_solar": total_solar_to_ev,
+        "ev_from_grid": ev_grid_import,
+        "total_demand": total_demand
     }
 
 
@@ -118,7 +198,8 @@ def calculate_multi_year_cashflow(
     include_battery: bool,
     finance_mode: bool = False,
     loan_term: int = 10,
-    loan_rate: float = 5.0
+    loan_rate: float = 5.0,
+    deposit_pct: float = 0
 ) -> dict:
     """Calculate multi-year cashflow projection.
 
@@ -126,6 +207,7 @@ def calculate_multi_year_cashflow(
         finance_mode: If True, spread install cost over loan term with interest
         loan_term: Number of years for loan repayment
         loan_rate: Annual interest rate for loan (%)
+        deposit_pct: Deposit percentage (0-100) paid upfront when financing
     """
 
     if include_battery:
@@ -139,21 +221,25 @@ def calculate_multi_year_cashflow(
 
     p_export = seg_price_p / 100
 
+    # Calculate deposit and loan amount
+    deposit_amount = install_cost * (deposit_pct / 100) if finance_mode else 0
+    loan_amount = install_cost - deposit_amount
+
     # Calculate annual loan payment if financing
     annual_loan_payment = 0
     total_interest = 0
-    if finance_mode and install_cost > 0:
-        annual_loan_payment = calculate_loan_payment(install_cost, loan_rate, loan_term)
-        total_interest = (annual_loan_payment * loan_term) - install_cost
+    if finance_mode and loan_amount > 0:
+        annual_loan_payment = calculate_loan_payment(loan_amount, loan_rate, loan_term)
+        total_interest = (annual_loan_payment * loan_term) - loan_amount
 
     annual_savings = []
     annual_net_benefit = []  # Savings minus loan payment
     cumulative_cashflow = []
     discounted_cashflow = []
 
-    # For purchase: upfront cost; for finance: no upfront cost
+    # For purchase: upfront cost; for finance: deposit only
     if finance_mode:
-        cum_cf = 0
+        cum_cf = -deposit_amount
     else:
         cum_cf = -install_cost
 
@@ -189,8 +275,8 @@ def calculate_multi_year_cashflow(
             payback = i + 1
             break
 
-    # Calculate NPV (no upfront cost for financed, payments are in cashflow)
-    npv = sum(discounted_cashflow)
+    # Calculate NPV (deposit is upfront cost for financed)
+    npv = -deposit_amount + sum(discounted_cashflow) if finance_mode else sum(discounted_cashflow)
 
     return {
         "install_cost": install_cost,
@@ -201,5 +287,7 @@ def calculate_multi_year_cashflow(
         "npv": npv,
         "annual_loan_payment": annual_loan_payment,
         "total_interest": total_interest,
-        "loan_term": loan_term if finance_mode else 0
+        "loan_term": loan_term if finance_mode else 0,
+        "deposit_amount": deposit_amount,
+        "loan_amount": loan_amount
     }
