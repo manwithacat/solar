@@ -472,7 +472,7 @@ with tab_calculator:
 
     if battery_kwh > 0:
         energy_data = {
-            "Category": ["Self-Consumed (Direct)", "Battery Discharge", "Export", "Grid Import"],
+            "Category": ["Immediate Use", "Stored Use", "Export", "Grid Supply"],
             "kWh": [
                 self_consumption["e_self_direct"],
                 self_consumption["e_self_batt"],
@@ -482,7 +482,7 @@ with tab_calculator:
         }
     else:
         energy_data = {
-            "Category": ["Self-Consumed (Direct)", "Battery Discharge", "Export", "Grid Import"],
+            "Category": ["Immediate Use", "Stored Use", "Export", "Grid Supply"],
             "kWh": [
                 self_consumption["e_self_direct"],
                 0,
