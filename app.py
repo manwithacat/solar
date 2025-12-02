@@ -179,10 +179,15 @@ with tab_battery:
     **Net benefit per kWh shifted:** 28p - 15p = **13p/kWh**
     """)
 
-    st.subheader("Battery Payback Calculation")
+    st.subheader("Battery Payback vs Lifespan")
+
+    st.warning("""
+    **Important reality check:** Most home batteries have a warranty of **10 years** and an effective
+    lifespan of **10-15 years**. If payback exceeds this, the pure financial case is weak.
+    """)
 
     st.markdown("""
-    A typical 5kWh battery costs around **£4,000**. To calculate payback:
+    A typical 5kWh battery costs around **£4,000**. Let's calculate the payback and compare to lifespan:
     """)
 
     # Interactive battery ROI calculator
@@ -205,7 +210,11 @@ with tab_battery:
     annual_battery_benefit = annual_kwh_shifted * value_per_kwh
     battery_payback = batt_cost_calc / annual_battery_benefit if annual_battery_benefit > 0 else float('inf')
 
-    col_result1, col_result2, col_result3 = st.columns(3)
+    # Typical battery lifespan
+    battery_warranty = 10
+    battery_lifespan = 12  # Realistic expectation
+
+    col_result1, col_result2, col_result3, col_result4 = st.columns(4)
     with col_result1:
         st.metric("Annual kWh Shifted", f"{annual_kwh_shifted:,.0f}")
     with col_result2:
@@ -215,6 +224,17 @@ with tab_battery:
             st.metric("Battery Payback", f"{battery_payback:.1f} years")
         else:
             st.metric("Battery Payback", "Not viable")
+    with col_result4:
+        if battery_payback < battery_warranty:
+            st.metric("Payback vs Warranty", f"✅ {battery_warranty - battery_payback:.1f}y margin")
+        elif battery_payback < battery_lifespan:
+            st.metric("Payback vs Lifespan", f"⚠️ {battery_lifespan - battery_payback:.1f}y margin")
+        else:
+            st.metric("Payback vs Lifespan", f"❌ Exceeds lifespan")
+
+    # Calculate lifetime return
+    lifetime_benefit = annual_battery_benefit * battery_lifespan
+    lifetime_roi = ((lifetime_benefit - batt_cost_calc) / batt_cost_calc * 100) if batt_cost_calc > 0 else 0
 
     st.info(f"""
     **Calculation:** {batt_capacity_calc} kWh × {daily_cycles} cycle/day × {usable_factor:.0%} usable × 365 days
@@ -224,6 +244,29 @@ with tab_battery:
 
     £{batt_cost_calc:,} ÷ £{annual_battery_benefit:,.0f} = **{battery_payback:.1f} year payback** on battery alone.
     """)
+
+    # Lifetime analysis
+    if battery_payback >= battery_lifespan:
+        st.error(f"""
+        **Lifetime Analysis:** With a {battery_lifespan}-year lifespan, you'd recover only
+        **£{lifetime_benefit:,.0f}** of the **£{batt_cost_calc:,}** battery cost — a **net loss of £{batt_cost_calc - lifetime_benefit:,.0f}**.
+
+        The battery does not pay for itself on pure economics at these prices.
+        """)
+    elif battery_payback >= battery_warranty:
+        st.warning(f"""
+        **Lifetime Analysis:** Payback of {battery_payback:.1f} years exceeds the {battery_warranty}-year warranty.
+        Over a {battery_lifespan}-year lifespan, total benefit = **£{lifetime_benefit:,.0f}** vs **£{batt_cost_calc:,}** cost.
+
+        Net lifetime gain: **£{lifetime_benefit - batt_cost_calc:,.0f}** ({lifetime_roi:.0f}% return) — marginal.
+        """)
+    else:
+        st.success(f"""
+        **Lifetime Analysis:** Payback within warranty period.
+        Over a {battery_lifespan}-year lifespan, total benefit = **£{lifetime_benefit:,.0f}** vs **£{batt_cost_calc:,}** cost.
+
+        Net lifetime gain: **£{lifetime_benefit - batt_cost_calc:,.0f}** ({lifetime_roi:.0f}% return).
+        """)
 
     st.subheader("When Does a Battery Make Sense?")
 
@@ -267,21 +310,43 @@ with tab_battery:
     - Opportunity cost of capital (money could be invested elsewhere)
     """)
 
-    st.subheader("The Verdict")
+    st.subheader("The Honest Verdict")
 
     st.markdown("""
-    **At current UK prices (2024):**
+    **The uncomfortable truth (at 2024 UK prices):**
 
-    - A well-sized battery typically pays back in **8-12 years**
-    - Combined with rising grid prices, lifetime savings can be significant
-    - The **non-financial benefits** (backup power, energy independence) add value
-    - If export tariffs drop (as they may), batteries become more attractive
+    - A typical battery payback of **15-20 years** often **exceeds the 10-15 year lifespan**
+    - At default prices (28p grid, 15p export), batteries struggle to make pure financial sense
+    - The economics only work with **higher grid prices** or **lower export rates**
+    """)
 
-    **Our recommendation:** If you're installing solar and plan to stay in the property 10+ years,
-    a battery is usually worthwhile. If you have an EV or plan to get one, it's even more compelling.
+    st.markdown("""
+    **When a battery IS financially justified:**
 
-    Use the Calculator tab to model your specific situation and see the cashflow comparison
-    between PV-only and PV+Battery scenarios.
+    | Scenario | Required spread | Typical payback |
+    |----------|-----------------|-----------------|
+    | Grid 35p, Export 5p | 30p/kWh | ~8 years ✅ |
+    | Grid 40p, Export 10p | 30p/kWh | ~8 years ✅ |
+    | Time-of-use tariff | Variable | Can be <5 years ✅ |
+
+    **When a battery is NOT financially justified:**
+
+    | Scenario | Spread | Typical payback |
+    |----------|--------|-----------------|
+    | Grid 28p, Export 15p | 13p/kWh | ~15 years ❌ |
+    | Grid 24p, Export 15p | 9p/kWh | ~22 years ❌ |
+    """)
+
+    st.markdown("""
+    **Our honest recommendation:**
+
+    - **Pure ROI focus?** Skip the battery at current prices — solar panels alone have much better returns
+    - **Want energy independence?** Battery adds resilience and future-proofs against rising prices
+    - **Have/planning an EV?** Battery synergy improves the case, but still check the numbers
+    - **On a time-of-use tariff?** Batteries can arbitrage cheap overnight rates — worth modelling
+
+    Use the Calculator tab to model your specific situation. Pay attention to whether the battery
+    adds positive value over the system's realistic lifetime.
     """)
 
 with tab_calculator:
