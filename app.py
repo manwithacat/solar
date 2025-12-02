@@ -30,7 +30,7 @@ st.set_page_config(
 
 st.title("☀️ UK Solar Economics Calculator")
 
-tab_calculator, tab_quotation, tab_assumptions = st.tabs(["Calculator", "Generate Quotation", "Assumptions & Sources"])
+tab_calculator, tab_battery, tab_quotation, tab_assumptions = st.tabs(["Calculator", "Why Battery?", "Generate Quotation", "Assumptions & Sources"])
 
 with tab_assumptions:
     st.header("Default Values & Sources")
@@ -146,6 +146,142 @@ with tab_assumptions:
     - [MCS](https://mcscertified.com/) - Microgeneration Certification Scheme data
     - [Solar Energy UK](https://solarenergyuk.org/) - Industry statistics
     - [Octopus Energy SEG](https://octopus.energy/outgoing/) - Example export tariff rates
+    """)
+
+with tab_battery:
+    st.header("Do I Need a Battery?")
+
+    st.markdown("""
+    A home battery stores excess solar energy generated during the day for use in the evening
+    and overnight. But is it worth the extra investment? Let's break it down.
+    """)
+
+    st.subheader("The Core Economics")
+
+    st.markdown("""
+    The financial case for a battery depends on the **spread** between what you pay for grid
+    electricity and what you earn from exporting:
+    """)
+
+    col_price1, col_price2, col_price3 = st.columns(3)
+    with col_price1:
+        st.metric("Grid Price", "28p/kWh", help="What you pay to import electricity")
+    with col_price2:
+        st.metric("Export Tariff (SEG)", "15p/kWh", help="What you earn selling to grid")
+    with col_price3:
+        st.metric("Value of Storage", "13p/kWh", help="Benefit per kWh stored vs exported")
+
+    st.markdown("""
+    **Without a battery:** Excess daytime solar is exported at 15p/kWh.
+
+    **With a battery:** That same energy is stored and used later, avoiding a 28p/kWh grid purchase.
+
+    **Net benefit per kWh shifted:** 28p - 15p = **13p/kWh**
+    """)
+
+    st.subheader("Battery Payback Calculation")
+
+    st.markdown("""
+    A typical 5kWh battery costs around **£4,000**. To calculate payback:
+    """)
+
+    # Interactive battery ROI calculator
+    st.markdown("#### Try your own numbers:")
+    col_batt1, col_batt2 = st.columns(2)
+    with col_batt1:
+        batt_cost_calc = st.number_input("Battery cost (£)", value=4000, step=500)
+        batt_capacity_calc = st.number_input("Battery capacity (kWh)", value=5.0, step=0.5)
+    with col_batt2:
+        grid_price_calc = st.number_input("Grid price (p/kWh)", value=28, step=1)
+        export_price_calc = st.number_input("Export price (p/kWh)", value=15, step=1)
+
+    # Assume 1 cycle per day, 90% usable on average
+    daily_cycles = 1.0
+    usable_factor = 0.9
+    days_per_year = 365
+
+    annual_kwh_shifted = batt_capacity_calc * daily_cycles * usable_factor * days_per_year
+    value_per_kwh = (grid_price_calc - export_price_calc) / 100
+    annual_battery_benefit = annual_kwh_shifted * value_per_kwh
+    battery_payback = batt_cost_calc / annual_battery_benefit if annual_battery_benefit > 0 else float('inf')
+
+    col_result1, col_result2, col_result3 = st.columns(3)
+    with col_result1:
+        st.metric("Annual kWh Shifted", f"{annual_kwh_shifted:,.0f}")
+    with col_result2:
+        st.metric("Annual Battery Benefit", f"£{annual_battery_benefit:,.0f}")
+    with col_result3:
+        if battery_payback < 100:
+            st.metric("Battery Payback", f"{battery_payback:.1f} years")
+        else:
+            st.metric("Battery Payback", "Not viable")
+
+    st.info(f"""
+    **Calculation:** {batt_capacity_calc} kWh × {daily_cycles} cycle/day × {usable_factor:.0%} usable × 365 days
+    = **{annual_kwh_shifted:,.0f} kWh/year** shifted from export to self-use.
+
+    At {grid_price_calc - export_price_calc}p/kWh benefit = **£{annual_battery_benefit:,.0f}/year** savings.
+
+    £{batt_cost_calc:,} ÷ £{annual_battery_benefit:,.0f} = **{battery_payback:.1f} year payback** on battery alone.
+    """)
+
+    st.subheader("When Does a Battery Make Sense?")
+
+    st.markdown("""
+    #### Good candidates for a battery:
+
+    | Scenario | Why it helps |
+    |----------|--------------|
+    | **High grid prices** | Greater spread between buy/sell prices |
+    | **Low export tariffs** | Less value lost by not exporting |
+    | **Evening/night usage** | More demand when solar isn't generating |
+    | **EV charging overnight** | Battery can supply EV from stored solar |
+    | **Time-of-use tariffs** | Charge from grid cheap, discharge at peak |
+    | **Future-proofing** | Export rates may fall, grid prices may rise |
+
+    #### Battery may NOT be worth it if:
+
+    | Scenario | Why |
+    |----------|-----|
+    | **High export tariff** | You earn nearly as much exporting as you'd save |
+    | **Mostly daytime usage** | You already use most solar directly |
+    | **Small solar system** | Not enough excess to fill the battery |
+    | **Short ownership period** | Not enough time to recoup battery cost |
+    """)
+
+    st.subheader("Beyond Simple Payback")
+
+    st.markdown("""
+    The payback calculation above is simplified. Real-world factors include:
+
+    **Positive factors:**
+    - Grid prices are rising (~3-5% annually) → battery value increases over time
+    - Battery provides backup during power cuts (if configured)
+    - Some tariffs pay more for export at peak times
+    - Reduced reliance on grid = energy security
+
+    **Negative factors:**
+    - Battery degrades over time (typically 70-80% capacity after 10 years)
+    - Not every day has enough sun to fully charge the battery
+    - Winter generation may not fill the battery
+    - Opportunity cost of capital (money could be invested elsewhere)
+    """)
+
+    st.subheader("The Verdict")
+
+    st.markdown("""
+    **At current UK prices (2024):**
+
+    - A well-sized battery typically pays back in **8-12 years**
+    - Combined with rising grid prices, lifetime savings can be significant
+    - The **non-financial benefits** (backup power, energy independence) add value
+    - If export tariffs drop (as they may), batteries become more attractive
+
+    **Our recommendation:** If you're installing solar and plan to stay in the property 10+ years,
+    a battery is usually worthwhile. If you have an EV or plan to get one, it's even more compelling.
+
+    Use the Calculator tab to model your specific situation and see the cashflow comparison
+    between PV-only and PV+Battery scenarios.
     """)
 
 with tab_calculator:
