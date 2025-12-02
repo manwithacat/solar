@@ -516,7 +516,7 @@ def generate_quotation_pdf(
             ["Monthly Payment:", f"£{cashflow['annual_loan_payment']/12:,.0f}"],
             ["Annual Payment:", f"£{cashflow['annual_loan_payment']:,.0f}"],
             ["Total Interest:", f"£{cashflow['total_interest']:,.0f}"],
-            ["Total Cost of Finance:", f"£{cashflow['deposit_amount'] + cashflow['loan_amount'] + cashflow['total_interest']:,.0f}"],
+            ["Total Cost of Finance:", f"£{cashflow['loan_amount'] + cashflow['total_interest']:,.0f}"],
         ]
     else:
         payment_data = [
