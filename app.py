@@ -445,11 +445,12 @@ with tab_calculator:
     # --- Payment Method Selection ---
     payment_method = st.radio(
         "Payment Method",
-        ["Purchase (upfront)", "Finance (loan)"],
-        index=1,  # Default to Finance
+        ["Purchase (upfront)", "Finance (loan)", "Finance (lease)"],
+        index=2,  # Default to Lease
         horizontal=True
     )
     finance_mode = payment_method == "Finance (loan)"
+    lease_mode = payment_method == "Finance (lease)"
 
     # --- Sidebar Inputs ---
     st.sidebar.header("Equipment Selection")
@@ -642,7 +643,7 @@ with tab_calculator:
 
     # Financing options (only shown when finance mode selected)
     if finance_mode:
-        st.sidebar.header("Financing Options")
+        st.sidebar.header("Loan Options")
 
         deposit_pct = st.sidebar.slider(
             "Deposit (%)",
@@ -658,10 +659,44 @@ with tab_calculator:
             "Loan interest rate (%)",
             min_value=0.0, max_value=15.0, value=5.0, step=0.5
         )
+
+        lease_term = 10
+        monthly_lease = 0
+
+    elif lease_mode:
+        st.sidebar.header("Lease Options")
+
+        st.sidebar.info("**No upfront cost** — fixed monthly payments for the lease term")
+
+        lease_term = st.sidebar.slider(
+            "Lease term (years)",
+            min_value=5, max_value=15, value=10, step=1
+        )
+
+        # Calculate suggested monthly lease payment based on equipment cost
+        # Typical lease factor: equipment cost spread over term + margin
+        suggested_monthly = int((total_equipment_cost / (lease_term * 12)) * 1.3)  # 30% margin
+
+        monthly_lease = st.sidebar.slider(
+            "Monthly lease payment (£)",
+            min_value=50, max_value=250, value=min(suggested_monthly, 135), step=5,
+            help="Typical range: £99-135/month for PV+battery systems"
+        )
+
+        total_lease_cost = monthly_lease * 12 * lease_term
+        st.sidebar.caption(f"Total over {lease_term} years: £{total_lease_cost:,}")
+
+        # No deposit for lease
+        deposit_pct = 0
+        loan_term = lease_term
+        loan_rate = 0.0
+
     else:
         deposit_pct = 0
         loan_term = 10
         loan_rate = 5.0
+        lease_term = 10
+        monthly_lease = 0
 
     st.sidebar.header("Household Usage")
 
@@ -767,7 +802,10 @@ with tab_calculator:
         finance_mode=finance_mode,
         loan_term=loan_term,
         loan_rate=loan_rate,
-        deposit_pct=deposit_pct
+        deposit_pct=deposit_pct,
+        lease_mode=lease_mode,
+        lease_term=lease_term,
+        monthly_lease=monthly_lease
     )
 
     cashflow_batt = calculate_multi_year_cashflow(
@@ -777,24 +815,71 @@ with tab_calculator:
         finance_mode=finance_mode,
         loan_term=loan_term,
         loan_rate=loan_rate,
-        deposit_pct=deposit_pct
+        deposit_pct=deposit_pct,
+        lease_mode=lease_mode,
+        lease_term=lease_term,
+        monthly_lease=monthly_lease
     )
 
     # --- Summary Cards ---
     st.header("Summary")
 
-    # Show selected equipment at top
-    if config_mode == "Choose a Package":
-        st.success(f"**{selected_package}** — {PACKAGES[selected_package]['description']}")
-    else:
-        components = []
-        if selected_panels:
-            components.append(f"{PANEL_OPTIONS[selected_panels]['count']} panels ({kwp:.1f} kWp)")
-        if selected_battery and battery_kwh > 0:
-            components.append(f"{battery_kwh:.1f} kWh battery")
-        if selected_ev_charger and has_ev:
-            components.append("EV charger")
-        st.info(f"**Custom System:** {' + '.join(components)}")
+    # Show detailed system contents
+    st.subheader("System Configuration")
+
+    col_sys1, col_sys2 = st.columns(2)
+
+    with col_sys1:
+        # Equipment details
+        if selected_panels and selected_panels in PANEL_OPTIONS:
+            panel_info = PANEL_OPTIONS[selected_panels]
+            st.markdown(f"**Solar Panels:** {panel_info['count']} × 460W Aiko panels ({kwp:.2f} kWp)")
+
+        if selected_inverter and selected_inverter in INVERTER_OPTIONS:
+            inv_info = INVERTER_OPTIONS[selected_inverter]
+            if inv_info["type"] == "micro":
+                st.markdown(f"**Inverter:** Enphase micro-inverters ({inv_info['warranty_years']}yr warranty)")
+            else:
+                st.markdown(f"**Inverter:** {selected_inverter} ({inv_info['warranty_years']}yr warranty)")
+
+        if selected_battery and selected_battery in BATTERY_OPTIONS and battery_kwh > 0:
+            batt_info = BATTERY_OPTIONS[selected_battery]
+            batt_extras = f"{batt_info['warranty_years']}yr warranty"
+            if batt_info.get("includes_inverter"):
+                batt_extras += ", incl. hybrid inverter"
+            st.markdown(f"**Battery:** {battery_kwh:.1f} kWh ({batt_extras})")
+        elif battery_kwh == 0:
+            st.markdown("**Battery:** None (export-only system)")
+
+        if selected_ev_charger and selected_ev_charger in EV_CHARGER_OPTIONS and has_ev:
+            ev_info = EV_CHARGER_OPTIONS[selected_ev_charger]
+            st.markdown(f"**EV Charger:** {selected_ev_charger} ({ev_info['power_kw']} kW)")
+
+    with col_sys2:
+        # Pricing summary based on payment method
+        st.markdown(f"**Equipment Cost:** £{total_equipment_cost:,}")
+
+        if lease_mode:
+            total_lease_cost = monthly_lease * 12 * lease_term
+            st.markdown(f"**Payment Method:** Lease ({lease_term} years)")
+            st.markdown(f"**Monthly Payment:** £{monthly_lease:,}/month")
+            st.markdown(f"**Total Cost of Lease:** £{total_lease_cost:,}")
+            st.info("No upfront payment required")
+        elif finance_mode:
+            cashflow = cashflow_batt if battery_kwh > 0 else cashflow_no_batt
+            total_finance_cost = cashflow['deposit_amount'] + (cashflow['annual_loan_payment'] * loan_term)
+            st.markdown(f"**Payment Method:** Loan ({loan_term} years @ {loan_rate}%)")
+            st.markdown(f"**Deposit:** £{cashflow['deposit_amount']:,.0f}")
+            st.markdown(f"**Total Cost incl. Interest:** £{total_finance_cost:,.0f}")
+            st.caption(f"Interest paid: £{cashflow['total_interest']:,.0f}")
+        else:
+            st.markdown(f"**Payment Method:** Upfront purchase")
+            st.markdown(f"**Total Cost:** £{total_equipment_cost:,}")
+
+    st.markdown("---")
+
+    # Performance metrics
+    st.subheader("Performance & Returns")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -822,7 +907,12 @@ with tab_calculator:
         npv = cashflow_batt['npv'] if battery_kwh > 0 else cashflow_no_batt['npv']
         st.metric("NPV", f"£{npv:,.0f}")
     with col6:
-        st.metric("Total System Cost", f"£{total_equipment_cost:,.0f}")
+        # Show self-consumption rate
+        if battery_kwh > 0:
+            self_cons_rate = (self_consumption['e_self_total_with_batt'] / generation['realistic']) * 100
+        else:
+            self_cons_rate = (self_consumption['e_self_direct'] / generation['realistic']) * 100
+        st.metric("Self-Consumption Rate", f"{self_cons_rate:.0f}%")
 
     # Show consumption breakdown if electric heating or EV
     if heating_type != "Gas/Oil boiler" or ev_annual_kwh > 0:
@@ -852,10 +942,10 @@ with tab_calculator:
             ev_solar_pct = (self_consumption['ev_from_solar'] / ev_annual_kwh * 100) if ev_annual_kwh > 0 else 0
             st.metric("Solar EV Charging %", f"{ev_solar_pct:.0f}%")
 
-    # Show financing details if in finance mode
+    # Show financing details if in finance or lease mode
     if finance_mode:
         cashflow = cashflow_batt if battery_kwh > 0 else cashflow_no_batt
-        st.subheader("Financing Details")
+        st.subheader("Loan Details")
         col_fin1, col_fin2, col_fin3, col_fin4, col_fin5 = st.columns(5)
         with col_fin1:
             st.metric("Deposit", f"£{cashflow['deposit_amount']:,.0f}")
@@ -867,6 +957,27 @@ with tab_calculator:
             st.metric("Loan Term", f"{loan_term} years @ {loan_rate}%")
         with col_fin5:
             st.metric("Total Interest", f"£{cashflow['total_interest']:,.0f}")
+
+    elif lease_mode:
+        cashflow = cashflow_batt if battery_kwh > 0 else cashflow_no_batt
+        st.subheader("Lease Details")
+        col_lease1, col_lease2, col_lease3, col_lease4 = st.columns(4)
+        with col_lease1:
+            st.metric("Monthly Payment", f"£{monthly_lease:,.0f}")
+        with col_lease2:
+            st.metric("Annual Payment", f"£{cashflow['annual_lease_payment']:,.0f}")
+        with col_lease3:
+            st.metric("Lease Term", f"{lease_term} years")
+        with col_lease4:
+            st.metric("Total Lease Cost", f"£{cashflow['total_lease_cost']:,.0f}")
+
+        # Show lease benefits
+        annual_savings = cashflow['annual_savings'][0] if cashflow['annual_savings'] else 0
+        net_annual = annual_savings - cashflow['annual_lease_payment']
+        if net_annual > 0:
+            st.success(f"**Net annual benefit: £{net_annual:,.0f}** (savings exceed lease cost)")
+        else:
+            st.warning(f"**Net annual cost: £{abs(net_annual):,.0f}** (lease exceeds savings in year 1, but grid prices rise)")
 
     # --- Explanatory Text ---
     st.info("""
@@ -960,6 +1071,8 @@ with tab_calculator:
     # Chart 4: Cumulative Cashflow
     if finance_mode:
         st.subheader("Cumulative Cashflow Over Time (with Loan Payments)")
+    elif lease_mode:
+        st.subheader("Cumulative Cashflow Over Time (with Lease Payments)")
     else:
         st.subheader("Cumulative Cashflow Over Time")
 
@@ -1069,6 +1182,7 @@ with tab_quotation:
     with col_opt1:
         gen_purchase = st.checkbox("Purchase (Upfront Payment)", value=True)
         gen_finance = st.checkbox("Finance (Loan)", value=True)
+        gen_lease = st.checkbox("Finance (Lease)", value=True)
     with col_opt2:
         gen_no_ev = st.checkbox("Without EV", value=True)
         gen_with_ev = st.checkbox("With EV Charging", value=True)
@@ -1097,6 +1211,8 @@ with tab_quotation:
             "deposit_pct": deposit_pct,
             "daily_miles": daily_miles if ev_annual_kwh > 0 else 30,
             "home_charging_pct": home_charging_pct if ev_annual_kwh > 0 else 0.8,
+            "lease_term": lease_term,
+            "monthly_lease": monthly_lease,
         }
 
         st.subheader("Current System Configuration")
@@ -1113,6 +1229,7 @@ with tab_quotation:
             st.write(f"**Heating:** {heating_type}")
             st.write(f"**Base Usage:** {d_annual_base:,} kWh")
             st.write(f"**Loan:** {loan_term}yr @ {loan_rate}%")
+            st.write(f"**Lease:** £{monthly_lease}/mo × {lease_term}yr")
 
         st.markdown("---")
 
@@ -1124,6 +1241,7 @@ with tab_quotation:
                     "name": "Purchase - No EV",
                     "filename": "quotation_purchase_no_ev.pdf",
                     "finance_mode": False,
+                    "lease_mode": False,
                     "has_ev": False,
                 })
             if gen_purchase and gen_with_ev:
@@ -1131,20 +1249,39 @@ with tab_quotation:
                     "name": "Purchase - With EV",
                     "filename": "quotation_purchase_with_ev.pdf",
                     "finance_mode": False,
+                    "lease_mode": False,
                     "has_ev": True,
                 })
             if gen_finance and gen_no_ev:
                 scenarios_to_generate.append({
-                    "name": "Finance - No EV",
+                    "name": "Finance (Loan) - No EV",
                     "filename": "quotation_finance_no_ev.pdf",
                     "finance_mode": True,
+                    "lease_mode": False,
                     "has_ev": False,
                 })
             if gen_finance and gen_with_ev:
                 scenarios_to_generate.append({
-                    "name": "Finance - With EV",
+                    "name": "Finance (Loan) - With EV",
                     "filename": "quotation_finance_with_ev.pdf",
                     "finance_mode": True,
+                    "lease_mode": False,
+                    "has_ev": True,
+                })
+            if gen_lease and gen_no_ev:
+                scenarios_to_generate.append({
+                    "name": "Lease - No EV",
+                    "filename": "quotation_lease_no_ev.pdf",
+                    "finance_mode": False,
+                    "lease_mode": True,
+                    "has_ev": False,
+                })
+            if gen_lease and gen_with_ev:
+                scenarios_to_generate.append({
+                    "name": "Lease - With EV",
+                    "filename": "quotation_lease_with_ev.pdf",
+                    "finance_mode": False,
+                    "lease_mode": True,
                     "has_ev": True,
                 })
 
@@ -1180,7 +1317,10 @@ with tab_quotation:
                             years=current_settings["years"],
                             discount_rate=current_settings["discount_rate"],
                             company_name=company_name,
-                            quote_ref=quote_ref if quote_ref else None
+                            quote_ref=quote_ref if quote_ref else None,
+                            lease_mode=scenario.get("lease_mode", False),
+                            lease_term=current_settings["lease_term"],
+                            monthly_lease=current_settings["monthly_lease"]
                         )
 
                         st.download_button(

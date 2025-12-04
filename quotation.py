@@ -294,6 +294,10 @@ def generate_quotation_pdf(
     deposit_pct: float = 25,
     loan_term: int = 10,
     loan_rate: float = 5.0,
+    # Lease
+    lease_mode: bool = False,
+    lease_term: int = 10,
+    monthly_lease: float = 0,
     # Analysis
     years: int = 25,
     discount_rate: float = 3.0,
@@ -339,7 +343,10 @@ def generate_quotation_pdf(
         finance_mode=finance_mode,
         loan_term=loan_term,
         loan_rate=loan_rate,
-        deposit_pct=deposit_pct
+        deposit_pct=deposit_pct,
+        lease_mode=lease_mode,
+        lease_term=lease_term,
+        monthly_lease=monthly_lease
     )
 
     # --- PDF Generation ---

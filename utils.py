@@ -199,7 +199,10 @@ def calculate_multi_year_cashflow(
     finance_mode: bool = False,
     loan_term: int = 10,
     loan_rate: float = 5.0,
-    deposit_pct: float = 0
+    deposit_pct: float = 0,
+    lease_mode: bool = False,
+    lease_term: int = 10,
+    monthly_lease: float = 0
 ) -> dict:
     """Calculate multi-year cashflow projection.
 
@@ -208,6 +211,9 @@ def calculate_multi_year_cashflow(
         loan_term: Number of years for loan repayment
         loan_rate: Annual interest rate for loan (%)
         deposit_pct: Deposit percentage (0-100) paid upfront when financing
+        lease_mode: If True, use fixed monthly lease payments (no ownership)
+        lease_term: Number of years for lease
+        monthly_lease: Monthly lease payment in pounds
     """
 
     if include_battery:
@@ -221,27 +227,35 @@ def calculate_multi_year_cashflow(
 
     p_export = seg_price_p / 100
 
-    # Calculate deposit and loan amount
+    # Calculate deposit and loan amount (for loan mode)
     deposit_amount = install_cost * (deposit_pct / 100) if finance_mode else 0
-    loan_amount = install_cost - deposit_amount
+    loan_amount = install_cost - deposit_amount if finance_mode else 0
 
-    # Calculate annual loan payment if financing
+    # Calculate annual payments based on mode
     annual_loan_payment = 0
+    annual_lease_payment = 0
     total_interest = 0
+    total_lease_cost = 0
+
     if finance_mode and loan_amount > 0:
         annual_loan_payment = calculate_loan_payment(loan_amount, loan_rate, loan_term)
         total_interest = (annual_loan_payment * loan_term) - loan_amount
+    elif lease_mode and monthly_lease > 0:
+        annual_lease_payment = monthly_lease * 12
+        total_lease_cost = annual_lease_payment * lease_term
 
     annual_savings = []
-    annual_net_benefit = []  # Savings minus loan payment
+    annual_net_benefit = []  # Savings minus loan/lease payment
     cumulative_cashflow = []
     discounted_cashflow = []
 
-    # For purchase: upfront cost; for finance: deposit only
+    # Starting cashflow position
     if finance_mode:
-        cum_cf = -deposit_amount
+        cum_cf = -deposit_amount  # Only deposit upfront for loan
+    elif lease_mode:
+        cum_cf = 0  # No upfront cost for lease
     else:
-        cum_cf = -install_cost
+        cum_cf = -install_cost  # Full cost upfront for purchase
 
     for t in range(1, years + 1):
         # Grid price escalates each year
@@ -254,9 +268,11 @@ def calculate_multi_year_cashflow(
 
         annual_savings.append(net_saving_t)
 
-        # Subtract loan payment if within loan term
+        # Subtract loan/lease payment if within term
         if finance_mode and t <= loan_term:
             net_benefit_t = net_saving_t - annual_loan_payment
+        elif lease_mode and t <= lease_term:
+            net_benefit_t = net_saving_t - annual_lease_payment
         else:
             net_benefit_t = net_saving_t
 
@@ -275,8 +291,13 @@ def calculate_multi_year_cashflow(
             payback = i + 1
             break
 
-    # Calculate NPV (deposit is upfront cost for financed)
-    npv = -deposit_amount + sum(discounted_cashflow) if finance_mode else sum(discounted_cashflow)
+    # Calculate NPV
+    if finance_mode:
+        npv = -deposit_amount + sum(discounted_cashflow)
+    elif lease_mode:
+        npv = sum(discounted_cashflow)  # No upfront cost
+    else:
+        npv = sum(discounted_cashflow)
 
     return {
         "install_cost": install_cost,
@@ -286,8 +307,11 @@ def calculate_multi_year_cashflow(
         "payback_years": payback,
         "npv": npv,
         "annual_loan_payment": annual_loan_payment,
+        "annual_lease_payment": annual_lease_payment,
         "total_interest": total_interest,
+        "total_lease_cost": total_lease_cost,
         "loan_term": loan_term if finance_mode else 0,
+        "lease_term": lease_term if lease_mode else 0,
         "deposit_amount": deposit_amount,
         "loan_amount": loan_amount
     }
