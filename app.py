@@ -21,12 +21,85 @@ from utils import (
     adjust_consumption_for_heating
 )
 from quotation import generate_quotation_pdf
+from equipment import (
+    PANEL_OPTIONS,
+    INVERTER_OPTIONS,
+    BATTERY_OPTIONS,
+    EV_CHARGER_OPTIONS,
+    PACKAGES,
+    calculate_component_total,
+    get_system_specs,
+    validate_system,
+    get_package_components,
+)
 
 st.set_page_config(
     page_title="UK Solar Economics Calculator",
     page_icon="☀️",
     layout="wide"
 )
+
+# Custom CSS for darker sidebar text
+st.markdown("""
+<style>
+    /* Darker text in sidebar for better legibility */
+    [data-testid="stSidebar"] {
+        background-color: #fef9e7;
+    }
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stSelectbox label,
+    [data-testid="stSidebar"] .stSlider label,
+    [data-testid="stSidebar"] .stRadio label,
+    [data-testid="stSidebar"] .stCheckbox label,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] .stNumberInput label {
+        color: #1a1a1a !important;
+        font-weight: 500 !important;
+    }
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] .stSubheader {
+        color: #0d0d0d !important;
+        font-weight: 700 !important;
+    }
+    [data-testid="stSidebar"] .stAlert p {
+        color: #1a1a1a !important;
+    }
+    /* Equipment selector styling */
+    [data-testid="stSidebar"] .stExpander {
+        background-color: rgba(255,255,255,0.5);
+        border-radius: 8px;
+    }
+    /* Price display */
+    .equipment-price {
+        font-size: 1.2em;
+        font-weight: bold;
+        color: #2e7d32;
+    }
+    /* Warning/error styling */
+    .system-warning {
+        background-color: #fff3cd;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #ffc107;
+    }
+    .system-error {
+        background-color: #f8d7da;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #dc3545;
+    }
+    .system-valid {
+        background-color: #d4edda;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid #28a745;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 st.title("☀️ UK Solar Economics Calculator")
 
@@ -184,8 +257,8 @@ with tab_battery:
 
     | Period | Grid price | Export rate | Spread | 5kWh battery payback |
     |--------|-----------|-------------|--------|---------------------|
-    | **2022-23 crisis** | 50-60p | 4-5p | ~50p | **~4 years** ✅ |
-    | **2024 normalised** | 28p | 15p | 13p | **~15 years** ❌ |
+    | **2022-23 crisis** | 50-60p | 4-5p | ~50p | **~4 years** |
+    | **2024 normalised** | 28p | 15p | 13p | **~15 years** |
 
     The energy crisis made batteries a no-brainer. Now that prices have normalised and export
     tariffs have risen (to encourage solar adoption), the spread has collapsed — and so has
@@ -338,16 +411,16 @@ with tab_battery:
 
     | Scenario | Required spread | Typical payback |
     |----------|-----------------|-----------------|
-    | Grid 35p, Export 5p | 30p/kWh | ~8 years ✅ |
-    | Grid 40p, Export 10p | 30p/kWh | ~8 years ✅ |
-    | Time-of-use tariff | Variable | Can be <5 years ✅ |
+    | Grid 35p, Export 5p | 30p/kWh | ~8 years |
+    | Grid 40p, Export 10p | 30p/kWh | ~8 years |
+    | Time-of-use tariff | Variable | Can be <5 years |
 
     **When a battery is NOT financially justified:**
 
     | Scenario | Spread | Typical payback |
     |----------|--------|-----------------|
-    | Grid 28p, Export 15p | 13p/kWh | ~15 years ❌ |
-    | Grid 24p, Export 15p | 9p/kWh | ~22 years ❌ |
+    | Grid 28p, Export 15p | 13p/kWh | ~15 years |
+    | Grid 24p, Export 15p | 9p/kWh | ~22 years |
     """)
 
     st.markdown("""
@@ -379,7 +452,166 @@ with tab_calculator:
     finance_mode = payment_method == "Finance (loan)"
 
     # --- Sidebar Inputs ---
-    st.sidebar.header("System & Weather Inputs")
+    st.sidebar.header("Equipment Selection")
+
+    # Package selector
+    config_mode = st.sidebar.radio(
+        "Configuration Mode",
+        ["Choose a Package", "Build Custom System"],
+        help="Select a pre-configured package or build your own"
+    )
+
+    if config_mode == "Choose a Package":
+        # Package selection
+        package_options = [k for k in PACKAGES.keys() if k != "Custom Configuration"]
+        selected_package = st.sidebar.selectbox(
+            "Select Package",
+            package_options,
+            index=1,  # Default to Package 2
+            help="Pre-configured systems based on current UK pricing"
+        )
+
+        pkg_data = get_package_components(selected_package)
+        selected_panels = pkg_data["panels"]
+        selected_inverter = pkg_data["inverter"]
+        selected_battery = pkg_data["battery"]
+        selected_ev_charger = pkg_data["ev_charger"]
+        use_package_price = True
+        package_price = pkg_data["package_price"]
+
+        # Show package details
+        st.sidebar.markdown(f"**{PACKAGES[selected_package]['description']}**")
+
+    else:
+        # Custom configuration
+        use_package_price = False
+        package_price = None
+
+        st.sidebar.subheader("Solar Panels")
+        selected_panels = st.sidebar.selectbox(
+            "Panel Configuration",
+            list(PANEL_OPTIONS.keys()),
+            index=1,
+            help="Select your panel configuration"
+        )
+        if selected_panels:
+            panel_info = PANEL_OPTIONS[selected_panels]
+            st.sidebar.caption(f"{panel_info['description']} • £{panel_info['price']:,}")
+
+        st.sidebar.subheader("Inverter")
+        selected_inverter = st.sidebar.selectbox(
+            "Inverter Type",
+            list(INVERTER_OPTIONS.keys()),
+            index=0,
+            help="String inverters are standard; micro-inverters offer panel-level optimisation"
+        )
+        if selected_inverter:
+            inv_info = INVERTER_OPTIONS[selected_inverter]
+            if inv_info["type"] == "micro":
+                panel_count = PANEL_OPTIONS[selected_panels]["count"] if selected_panels else 0
+                inv_price = inv_info["price_per_panel"] * panel_count
+                st.sidebar.caption(f"{inv_info['warranty_years']}yr warranty • £{inv_price:,} ({panel_count} panels)")
+            else:
+                st.sidebar.caption(f"{inv_info['warranty_years']}yr warranty • £{inv_info['price']:,}")
+
+        st.sidebar.subheader("Battery Storage")
+        selected_battery = st.sidebar.selectbox(
+            "Battery",
+            list(BATTERY_OPTIONS.keys()),
+            index=4,  # Default to 5.2 kWh
+            help="Larger batteries store more solar for evening use"
+        )
+        if selected_battery and selected_battery != "No battery":
+            batt_info = BATTERY_OPTIONS[selected_battery]
+            extras = []
+            if batt_info.get("includes_inverter"):
+                extras.append("incl. hybrid inverter")
+            if batt_info["warranty_years"] > 10:
+                extras.append(f"{batt_info['warranty_years']}yr warranty")
+            else:
+                extras.append(f"{batt_info['warranty_years']}yr warranty")
+            extra_str = " • ".join(extras)
+            st.sidebar.caption(f"{extra_str} • £{batt_info['price']:,}")
+
+        st.sidebar.subheader("EV Charger")
+        selected_ev_charger = st.sidebar.selectbox(
+            "EV Charger",
+            list(EV_CHARGER_OPTIONS.keys()),
+            index=0,
+            help="Add an EV charger to your installation"
+        )
+        if selected_ev_charger and selected_ev_charger != "No EV charger":
+            ev_info = EV_CHARGER_OPTIONS[selected_ev_charger]
+            st.sidebar.caption(f"{ev_info['description']} • £{ev_info['price']:,}")
+
+    # Calculate system specs and pricing
+    system_specs = get_system_specs(selected_panels, selected_inverter, selected_battery, selected_ev_charger)
+    kwp = system_specs["kwp"]
+    battery_kwh = system_specs["battery_kwh"]
+    has_ev = system_specs["has_ev"]
+
+    # Calculate component costs
+    component_breakdown = calculate_component_total(
+        selected_panels, selected_inverter, selected_battery, selected_ev_charger
+    )
+
+    # Use package price if selected, otherwise component total
+    if use_package_price and package_price:
+        # Add EV charger to package price if not included
+        ev_price = EV_CHARGER_OPTIONS.get(selected_ev_charger, {}).get("price", 0)
+        if selected_ev_charger and "EV" not in selected_package:
+            total_equipment_cost = package_price + ev_price
+        else:
+            total_equipment_cost = package_price
+        # Split into PV and battery costs for the calculator
+        # Estimate: battery is roughly 35-45% of package price
+        if battery_kwh > 0:
+            battery_cost = int(total_equipment_cost * 0.4)
+            pv_cost = total_equipment_cost - battery_cost - ev_price
+        else:
+            battery_cost = 0
+            pv_cost = total_equipment_cost - ev_price
+    else:
+        total_equipment_cost = component_breakdown["total"]
+        pv_cost = component_breakdown["panels"] + component_breakdown["inverter"] + component_breakdown["installation"]
+        battery_cost = component_breakdown["battery"]
+
+    # Validate system configuration
+    errors, warnings = validate_system(selected_panels, selected_inverter, selected_battery)
+
+    # Display pricing summary in sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("System Summary")
+
+    col_s1, col_s2 = st.sidebar.columns(2)
+    with col_s1:
+        st.sidebar.metric("Solar Capacity", f"{kwp:.1f} kWp")
+    with col_s2:
+        st.sidebar.metric("Battery", f"{battery_kwh:.1f} kWh" if battery_kwh > 0 else "None")
+
+    if use_package_price and package_price:
+        st.sidebar.success(f"**Package Price: £{total_equipment_cost:,}**")
+    else:
+        st.sidebar.info(f"**Estimated Total: £{total_equipment_cost:,}**")
+        with st.sidebar.expander("Cost Breakdown"):
+            st.write(f"Panels: £{component_breakdown['panels']:,}")
+            st.write(f"Inverter: £{component_breakdown['inverter']:,}")
+            st.write(f"Battery: £{component_breakdown['battery']:,}")
+            st.write(f"EV Charger: £{component_breakdown['ev_charger']:,}")
+            st.write(f"Installation: £{component_breakdown['installation']:,}")
+
+    # Show validation messages
+    if errors:
+        for error in errors:
+            st.sidebar.error(error)
+    if warnings:
+        for warning in warnings:
+            st.sidebar.warning(warning)
+    if not errors and not warnings:
+        st.sidebar.success("✓ Valid system configuration")
+
+    st.sidebar.markdown("---")
+    st.sidebar.header("Location & Orientation")
 
     location = st.sidebar.selectbox(
         "Location",
@@ -391,27 +623,7 @@ with tab_calculator:
         ["Ideal (South)", "OK (SE/SW)", "Suboptimal (E/W)", "Poor (North/shaded)"]
     )
 
-    kwp = st.sidebar.slider(
-        "Solar Peak Capacity (kWp)",
-        min_value=1.0, max_value=10.0, value=4.0, step=0.5
-    )
-
-    battery_kwh = st.sidebar.slider(
-        "Battery Size (kWh usable)",
-        min_value=0, max_value=20, value=5, step=1
-    )
-
-    st.sidebar.header("Financial Inputs")
-
-    pv_cost = st.sidebar.slider(
-        "Install cost (PV) £",
-        min_value=3000, max_value=20000, value=6000, step=500
-    )
-
-    battery_cost = st.sidebar.slider(
-        "Battery install cost £",
-        min_value=0, max_value=15000, value=4000, step=500
-    )
+    st.sidebar.header("Energy Prices")
 
     grid_price_p = st.sidebar.slider(
         "Grid price (p/kWh)",
@@ -451,7 +663,7 @@ with tab_calculator:
         loan_term = 10
         loan_rate = 5.0
 
-    st.sidebar.header("Demand Inputs")
+    st.sidebar.header("Household Usage")
 
     heating_type = st.sidebar.selectbox(
         "Heating Type",
@@ -474,11 +686,10 @@ with tab_calculator:
     ) / 100
 
     # EV charging options
-    st.sidebar.header("EV Charging (Optional)")
-
-    has_ev = st.sidebar.checkbox("Include EV charging", value=False)
+    st.sidebar.header("EV Charging")
 
     if has_ev:
+        st.sidebar.info("EV charger included in your system")
         daily_miles = st.sidebar.slider(
             "Average daily miles",
             min_value=10, max_value=100, value=30, step=5
@@ -491,8 +702,25 @@ with tab_calculator:
         ev_consumption = calculate_ev_consumption(daily_miles, home_charging_pct)
         ev_annual_kwh = ev_consumption["annual_kwh"]
     else:
-        daily_miles = 0
-        ev_annual_kwh = 0
+        include_ev_manually = st.sidebar.checkbox("Model EV charging (no charger)", value=False)
+        if include_ev_manually:
+            daily_miles = st.sidebar.slider(
+                "Average daily miles",
+                min_value=10, max_value=100, value=30, step=5
+            )
+            home_charging_pct = st.sidebar.slider(
+                "Home charging share (%)",
+                min_value=50, max_value=100, value=80, step=5,
+                help="Percentage of charging done at home vs workplace/public"
+            ) / 100
+            ev_consumption = calculate_ev_consumption(daily_miles, home_charging_pct)
+            ev_annual_kwh = ev_consumption["annual_kwh"]
+        else:
+            daily_miles = 0
+            home_charging_pct = 0.8
+            ev_annual_kwh = 0
+
+    st.sidebar.header("Analysis Period")
 
     years = st.sidebar.slider(
         "Time horizon (years)",
@@ -555,6 +783,19 @@ with tab_calculator:
     # --- Summary Cards ---
     st.header("Summary")
 
+    # Show selected equipment at top
+    if config_mode == "Choose a Package":
+        st.success(f"**{selected_package}** — {PACKAGES[selected_package]['description']}")
+    else:
+        components = []
+        if selected_panels:
+            components.append(f"{PANEL_OPTIONS[selected_panels]['count']} panels ({kwp:.1f} kWp)")
+        if selected_battery and battery_kwh > 0:
+            components.append(f"{battery_kwh:.1f} kWh battery")
+        if selected_ev_charger and has_ev:
+            components.append("EV charger")
+        st.info(f"**Custom System:** {' + '.join(components)}")
+
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Realistic Annual Generation", f"{generation['realistic']:,.0f} kWh")
@@ -581,11 +822,10 @@ with tab_calculator:
         npv = cashflow_batt['npv'] if battery_kwh > 0 else cashflow_no_batt['npv']
         st.metric("NPV", f"£{npv:,.0f}")
     with col6:
-        total_cost = pv_cost + (battery_cost if battery_kwh > 0 else 0)
-        st.metric("Total Install Cost", f"£{total_cost:,.0f}")
+        st.metric("Total System Cost", f"£{total_equipment_cost:,.0f}")
 
     # Show consumption breakdown if electric heating or EV
-    if heating_type != "Gas/Oil boiler" or has_ev:
+    if heating_type != "Gas/Oil boiler" or ev_annual_kwh > 0:
         st.subheader("Consumption Breakdown")
         col_cons1, col_cons2, col_cons3 = st.columns(3)
         with col_cons1:
@@ -596,12 +836,12 @@ with tab_calculator:
             else:
                 st.metric("Household Total", f"{d_annual:,.0f} kWh")
         with col_cons3:
-            if has_ev:
+            if ev_annual_kwh > 0:
                 st.metric("EV Charging", f"{ev_annual_kwh:,.0f} kWh/year")
                 st.caption(f"({daily_miles} miles/day)")
 
     # Show EV solar charging if applicable
-    if has_ev and battery_kwh > 0:
+    if ev_annual_kwh > 0 and battery_kwh > 0:
         st.subheader("EV Charging from Solar")
         col_ev1, col_ev2, col_ev3 = st.columns(3)
         with col_ev1:
@@ -804,7 +1044,7 @@ with tab_calculator:
 
     # Footer
     st.markdown("---")
-    st.caption("This is an educational model, not a physically accurate irradiance simulation.")
+    st.caption("Equipment pricing based on typical UK installer rates. This is an educational model, not a physically accurate irradiance simulation.")
 
 with tab_quotation:
     st.header("Generate Customer Quotation")
@@ -836,7 +1076,6 @@ with tab_quotation:
     st.markdown("---")
 
     # Use current sidebar values for the quotation
-    # These are defined in the calculator tab but accessible here
     try:
         current_settings = {
             "location": location,
@@ -856,20 +1095,20 @@ with tab_quotation:
             "loan_term": loan_term,
             "loan_rate": loan_rate,
             "deposit_pct": deposit_pct,
-            "daily_miles": daily_miles if has_ev else 30,
-            "home_charging_pct": home_charging_pct if has_ev else 0.8,
+            "daily_miles": daily_miles if ev_annual_kwh > 0 else 30,
+            "home_charging_pct": home_charging_pct if ev_annual_kwh > 0 else 0.8,
         }
 
         st.subheader("Current System Configuration")
         col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
         with col_cfg1:
-            st.write(f"**Solar:** {kwp} kWp")
-            st.write(f"**Battery:** {battery_kwh} kWh")
+            st.write(f"**Solar:** {kwp:.1f} kWp")
+            st.write(f"**Battery:** {battery_kwh:.1f} kWh")
             st.write(f"**Location:** {location}")
         with col_cfg2:
             st.write(f"**PV Cost:** £{pv_cost:,}")
             st.write(f"**Battery Cost:** £{battery_cost:,}")
-            st.write(f"**Total:** £{pv_cost + battery_cost:,}")
+            st.write(f"**Total:** £{total_equipment_cost:,}")
         with col_cfg3:
             st.write(f"**Heating:** {heating_type}")
             st.write(f"**Base Usage:** {d_annual_base:,} kWh")
