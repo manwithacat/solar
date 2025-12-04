@@ -909,7 +909,8 @@ with tab_calculator:
     with col6:
         # Show self-consumption rate
         if battery_kwh > 0:
-            self_cons_rate = (self_consumption['e_self_total_with_batt'] / generation['realistic']) * 100
+            total_self_use = self_consumption['e_self_direct'] + self_consumption['e_self_batt']
+            self_cons_rate = (total_self_use / generation['realistic']) * 100
         else:
             self_cons_rate = (self_consumption['e_self_direct'] / generation['realistic']) * 100
         st.metric("Self-Consumption Rate", f"{self_cons_rate:.0f}%")
